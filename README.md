@@ -237,8 +237,6 @@ A: 支持 Windows、macOS 和 Linux
 
 如有问题或建议，请通过以下方式联系：
 - 提交 GitHub Issue
-- 发送邮件到 [your-email@example.com]
-
 ---
 
 **让 Git 操作更简单、更直观！** 🎉
