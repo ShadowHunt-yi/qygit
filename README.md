@@ -122,7 +122,38 @@ qygit sync
 ```bash
 # 从 origin/master 获取并合并最新代码
 qygit getLatest
+qygit gl  # 使用别名
 ```
+
+### Cherry-Pick 功能
+```bash
+# 单个 commit cherry-pick
+qygit cherryPick abc123
+qygit cp abc123  # 使用别名
+
+# 多个 commit cherry-pick
+qygit cp abc123 def456 ghi789
+
+# Commit 区间 cherry-pick
+qygit cp abc123..def456          # 不包含起始 commit
+qygit cp abc123^..def456         # 包含起始 commit
+
+# 区间并排除特定 commit
+qygit cp abc123..def456 -e ghi789,jkl012
+
+# 高级选项
+qygit cp abc123 -n               # 不自动 commit，仅应用更改
+qygit cp --continue              # 解决冲突后继续
+qygit cp --abort                 # 中止当前 cherry-pick
+qygit cp --skip                  # 跳过当前 commit
+```
+
+功能特点：
+- 🍒 **多种方式** - 支持单个、多个、区间 cherry-pick
+- 🚫 **排除功能** - 可以从区间中排除特定 commit
+- 🔧 **冲突处理** - 提供继续、中止、跳过选项
+- 📋 **预览功能** - 显示将要处理的 commit 列表
+- ⚡ **批量操作** - 一次处理多个 commit
 
 ## 📋 命令列表
 
@@ -136,7 +167,8 @@ qygit getLatest
 | `commit` | `ci` | 交互式提交 |
 | `stash [options]` | - | Stash 管理 |
 | `sync` | - | 同步（pull + push） |
-| `getLatest` | - | 从 origin/master 获取最新代码 |
+| `getLatest` | `gl` | 从 origin/master 获取最新代码 |
+| `cherryPick [commits...]` | `cp` | 高级 cherry-pick 功能 |
 
 ## 🎯 使用示例
 
@@ -183,6 +215,26 @@ qygit qc "fix: resolve critical bug"
 
 # 6. 恢复之前的工作
 qygit stash -p
+```
+
+### Cherry-Pick 使用场景
+```bash
+# 场景1: 将特定功能从开发分支移植到主分支
+qygit sw main
+qygit cp abc123 def456  # 选择性移植两个 commit
+
+# 场景2: 移植一个功能的完整提交区间
+qygit cp feature-start^..feature-end
+
+# 场景3: 移植区间但排除某些不需要的 commit
+qygit cp abc123..def456 -e bug-commit1,temp-commit2
+
+# 场景4: 遇到冲突时的处理
+qygit cp abc123  # 如果有冲突会提示
+# 手动解决冲突后
+qygit cp --continue  # 继续 cherry-pick
+# 或者
+qygit cp --abort     # 放弃 cherry-pick
 ```
 
 ## 🔧 技术栈

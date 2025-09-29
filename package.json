@@ -1,7 +1,7 @@
 {
   "name": "qygit",
-  "version": "1.0.1",
-  "description": "",
+  "version": "1.2.0",
+  "description": "QY 的增强 Git 包装工具，支持快速提交、美化显示、交互式操作和高级 cherry-pick 功能",
   "main": "index.js",
   "scripts": {
     "test": "echo \"Error: no test specified\" && exit 1"

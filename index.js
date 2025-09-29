@@ -6,7 +6,7 @@ import inquirer from 'inquirer';
 
 const program = new Command();
 
-program.name('qygit').description('QY 的简单 Git 包装工具').version('0.1.0');
+program.name('qygit').description('QY 的简单 Git 包装工具').version('1.2.0');
 // 快速提交功能
 program.command("quickCommit <message>")
     .alias("qc")
@@ -431,7 +431,7 @@ program.command("sync")
         }
     });
 
-program.command("getLatest")
+program.command("getLatest").alias("gl")
     .description("从 origin/master 获取并 merge")
     .action(async () => {
         try {
@@ -444,19 +444,155 @@ program.command("getLatest")
             console.error(chalk.red('❌ Merge 失败:'), error.message);
         }
     });
+
+program.command("cherryPick [commits...]")
+    .alias("cp")
+    .description("cherry pick 指定 commit(s)，支持多个 commit、区间和排除")
+    .option('-e, --exclude <commits>', '排除的 commit 列表，用逗号分隔')
+    .option('-n, --no-commit', '不自动 commit，仅应用更改')
+    .option('--continue', '继续进行中的 cherry-pick')
+    .option('--abort', '中止当前的 cherry-pick')
+    .option('--skip', '跳过当前 commit 并继续')
+    .action(async (commits, options) => {
+        try {
+            // 处理特殊操作
+            if (options.continue) {
+                await execa('git', ['cherry-pick', '--continue']);
+                console.log(chalk.green('✅ 已继续 cherry-pick'));
+                return;
+            }
+            
+            if (options.abort) {
+                await execa('git', ['cherry-pick', '--abort']);
+                console.log(chalk.yellow('⚠️  已中止 cherry-pick'));
+                return;
+            }
+            
+            if (options.skip) {
+                await execa('git', ['cherry-pick', '--skip']);
+                console.log(chalk.yellow('⚠️  已跳过当前 commit'));
+                return;
+            }
+            
+            if (!commits || commits.length === 0) {
+                console.log(chalk.red('❌ 请指定要 cherry-pick 的 commit'));
+                console.log('');
+                console.log(chalk.blue('使用示例:'));
+                console.log('  qygit cp abc123                    # 单个 commit');
+                console.log('  qygit cp abc123 def456 ghi789      # 多个 commit');
+                console.log('  qygit cp abc123..def456            # commit 区间');
+                console.log('  qygit cp abc123^..def456           # 包含起始 commit 的区间');
+                console.log('  qygit cp abc123..def456 -e ghi789  # 区间并排除特定 commit');
+                return;
+            }
+            
+            console.log(chalk.blue('🍒 开始 cherry-pick...'));
+            
+            let commitsToProcess = [];
+            
+            // 处理每个参数
+            for (const commitArg of commits) {
+                if (commitArg.includes('..')) {
+                    // 处理区间
+                    const rangeCommits = await getCommitsInRange(commitArg);
+                    commitsToProcess.push(...rangeCommits);
+                } else {
+                    // 单个 commit
+                    commitsToProcess.push(commitArg);
+                }
+            }
+            
+            // 处理排除列表
+            if (options.exclude) {
+                const excludeCommits = options.exclude.split(',').map(c => c.trim());
+                commitsToProcess = commitsToProcess.filter(commit => {
+                    return !excludeCommits.some(exclude => commit.startsWith(exclude));
+                });
+                console.log(chalk.yellow(`⚠️  排除了 ${excludeCommits.length} 个 commit: ${excludeCommits.join(', ')}`));
+            }
+            
+            if (commitsToProcess.length === 0) {
+                console.log(chalk.yellow('⚠️  没有需要 cherry-pick 的 commit'));
+                return;
+            }
+            
+            console.log(chalk.blue(`📋 将要 cherry-pick ${commitsToProcess.length} 个 commit:`));
+            commitsToProcess.forEach((commit, index) => {
+                console.log(`  ${index + 1}. ${commit}`);
+            });
+            console.log('');
+            
+            // 构建 git cherry-pick 命令参数
+            const gitArgs = ['cherry-pick'];
+            if (options.noCommit) {
+                gitArgs.push('--no-commit');
+            }
+            gitArgs.push(...commitsToProcess);
+            
+            // 执行 cherry-pick
+            await execa('git', gitArgs);
+            
+            if (options.noCommit) {
+                console.log(chalk.green('✅ 已应用更改但未 commit，请手动 commit'));
+            } else {
+                console.log(chalk.green(`✅ 已成功 cherry-pick ${commitsToProcess.length} 个 commit`));
+            }
+            
+        } catch (error) {
+            console.error(chalk.red('❌ Cherry-pick 失败:'), error.message);
+            
+            if (error.message.includes('conflict')) {
+                console.log('');
+                console.log(chalk.yellow('🔧 检测到冲突，请解决冲突后使用以下命令:'));
+                console.log(chalk.cyan('  qygit cp --continue    # 解决冲突后继续'));
+                console.log(chalk.cyan('  qygit cp --abort       # 中止 cherry-pick'));
+                console.log(chalk.cyan('  qygit cp --skip        # 跳过当前 commit'));
+            }
+        }
+    });
+
+// 辅助函数：获取区间内的 commit 列表
+async function getCommitsInRange(range) {
+    try {
+        const result = await execa('git', ['rev-list', '--reverse', range]);
+        return result.stdout.split('\n').filter(line => line.trim());
+    } catch (error) {
+        throw new Error(`无法获取区间 ${range} 内的 commit: ${error.message}`);
+    }
+}
 // 显示帮助信息
 program.on('--help', () => {
     console.log('');
-    console.log(chalk.blue.bold('🛠️  QYGit - 增强的 Git 包装工具'));
+    console.log(chalk.blue.bold('🛠️  QYGit - 增强的 Git 包装工具 v0.2.0'));
     console.log('');
-    console.log('使用示例:');
-    console.log('  $ qygit qc "feat: add new feature"    # 快速 commit');
+    console.log(chalk.yellow.bold('📋 基础命令:'));
+    console.log('  $ qygit qc "feat: add new feature"    # 快速 commit 和 push');
     console.log('  $ qygit st                            # 美化状态显示');
-    console.log('  $ qygit br -c feature/new             # 创建分支');
-    console.log('  $ qygit sw main                       # 切换分支');
     console.log('  $ qygit ci                            # 交互式 commit');
-    console.log('  $ qygit sync                          # Pull 和 push');
-    console.log('  $ qygit getLatest                     # 从 origin/master 获取最新代码');
+    console.log('  $ qygit lg -n 20                      # 显示提交日志');
+    console.log('');
+    console.log(chalk.green.bold('🌿 分支管理:'));
+    console.log('  $ qygit br -c feature/new             # 创建新分支');
+    console.log('  $ qygit br -d old-branch              # 删除分支');
+    console.log('  $ qygit sw main                       # 切换分支');
+    console.log('  $ qygit br -l                         # 列出所有分支');
+    console.log('');
+    console.log(chalk.cyan.bold('🍒 Cherry-Pick 功能:'));
+    console.log('  $ qygit cp abc123                     # 单个 commit');
+    console.log('  $ qygit cp abc123 def456 ghi789       # 多个 commit');
+    console.log('  $ qygit cp abc123..def456             # commit 区间');
+    console.log('  $ qygit cp abc123^..def456            # 包含起始 commit 的区间');
+    console.log('  $ qygit cp abc123..def456 -e ghi789   # 区间排除特定 commit');
+    console.log('  $ qygit cp --continue                 # 解决冲突后继续');
+    console.log('  $ qygit cp --abort                    # 中止 cherry-pick');
+    console.log('');
+    console.log(chalk.magenta.bold('📦 其他功能:'));
+    console.log('  $ qygit stash -s "work in progress"   # 保存工作到 stash');
+    console.log('  $ qygit stash -p                      # 恢复最新 stash');
+    console.log('  $ qygit sync                          # 同步远程 (pull + push)');
+    console.log('  $ qygit gl                            # 从 origin/master 获取最新');
+    console.log('');
+    console.log(chalk.gray('💡 提示: 每个命令都有简短别名，使用 qygit <command> --help 查看详细选项'));
     console.log('');
 });
 
