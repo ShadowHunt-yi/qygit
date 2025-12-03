@@ -2,6 +2,7 @@
 import { Command } from 'commander';
 import { execa } from 'execa';
 import chalk from 'chalk';
+import cliProgress from 'cli-progress';
 import inquirer from 'inquirer';
 
 const program = new Command();
@@ -430,7 +431,136 @@ program.command("sync")
             console.error(chalk.red('❌ 同步失败:'), error.message);
         }
     });
-
+    program.command("sync-all")
+    .description("智能同步所有分支（可选择跳过某些分支）")
+    .option('-s, --skip <branches>', '跳过指定分支（逗号分隔）')
+    .option('-o, --only <branches>', '只同步指定分支（逗号分隔）')
+    .option('-f, --force', '强制推送（使用 --force-with-lease）')
+    .action(async (options) => {
+        try {
+            console.log(chalk.blue('🔄 智能同步全部分支...'));
+            
+            // 获取当前分支
+            const currentBranch = (await execa('git', ['branch', '--show-current'])).stdout.trim();
+            
+            // 获取所有本地分支
+            const branchesOutput = await execa('git', ['branch', '--format=%(refname:short)']);
+            let localBranches = branchesOutput.stdout.split('\n').filter(b => b);
+            
+            // 应用过滤选项
+            if (options.skip) {
+                const skipList = options.skip.split(',').map(b => b.trim());
+                localBranches = localBranches.filter(b => !skipList.includes(b));
+            }
+            
+            if (options.only) {
+                const onlyList = options.only.split(',').map(b => b.trim());
+                localBranches = localBranches.filter(b => onlyList.includes(b));
+            }
+            
+            console.log(chalk.cyan(`将同步 ${localBranches.length} 个分支`));
+            
+            // 创建进度条
+            const progressBar = new cliProgress.SingleBar({
+                format: '同步进度 |' + chalk.cyan('{bar}') + '| {percentage}% | {value}/{total} 分支',
+                barCompleteChar: '█',
+                barIncompleteChar: '░',
+                hideCursor: true
+            });
+            
+            progressBar.start(localBranches.length, 0);
+            
+            const results = {
+                success: [],
+                failed: [],
+                skipped: []
+            };
+            
+            // 同步每个分支
+            for (let i = 0; i < localBranches.length; i++) {
+                const branch = localBranches[i];
+                progressBar.update(i, { branch });
+                
+                try {
+                    // 跳过当前分支（主循环处理）
+                    if (branch === currentBranch) {
+                        results.skipped.push({ branch, reason: '当前分支' });
+                        continue;
+                    }
+                    
+                    // 检查是否有未提交的修改
+                    const status = await execa('git', ['status', '--porcelain'], { cwd: process.cwd() });
+                    if (status.stdout.trim()) {
+                        results.skipped.push({ branch, reason: '有未提交的修改' });
+                        continue;
+                    }
+                    
+                    // 切换到分支
+                    await execa('git', ['checkout', branch]);
+                    
+                    // 尝试 pull
+                    try {
+                        await execa('git', ['pull', 'origin', branch]);
+                    } catch (pullError) {
+                        // 如果远程分支不存在，跳过 pull
+                        if (!pullError.message.includes('Couldn\'t find remote ref')) {
+                            throw pullError;
+                        }
+                    }
+                    
+                    // push
+                    const pushArgs = options.force 
+                        ? ['push', 'origin', branch, '--force-with-lease']
+                        : ['push', 'origin', branch];
+                    
+                    await execa('git', pushArgs);
+                    
+                    results.success.push(branch);
+                    
+                } catch (error) {
+                    results.failed.push({
+                        branch,
+                        error: error.message
+                    });
+                }
+            }
+            
+            // 切回原始分支
+            await execa('git', ['checkout', currentBranch]);
+            
+            progressBar.stop();
+            
+            // 显示详细结果
+            console.log(chalk.cyan('\n' + '='.repeat(50)));
+            console.log(chalk.bold('📊 同步结果详情:'));
+            
+            if (results.success.length > 0) {
+                console.log(chalk.green('\n✅ 成功同步的分支:'));
+                results.success.forEach(b => console.log(`  ${b}`));
+            }
+            
+            if (results.skipped.length > 0) {
+                console.log(chalk.yellow('\n⏭️  跳过的分支:'));
+                results.skipped.forEach(({ branch, reason }) => 
+                    console.log(`  ${branch} (${reason})`)
+                );
+            }
+            
+            if (results.failed.length > 0) {
+                console.log(chalk.red('\n❌ 失败的分支:'));
+                results.failed.forEach(({ branch, error }) => 
+                    console.log(`  ${branch}: ${error}`)
+                );
+            }
+            
+            console.log(chalk.cyan('\n' + '='.repeat(50)));
+            console.log(chalk.bold(`总计: ${localBranches.length} 分支 | 成功: ${results.success.length} | 跳过: ${results.skipped.length} | 失败: ${results.failed.length}`));
+            
+        } catch (error) {
+            console.error(chalk.red('❌ 同步过程出错:'), error.message);
+            process.exit(1);
+        }
+    });
 program.command("getLatest").alias("gl")
     .description("从 origin/master 获取并 merge")
     .action(async () => {
@@ -563,7 +693,7 @@ async function getCommitsInRange(range) {
 // 显示帮助信息
 program.on('--help', () => {
     console.log('');
-    console.log(chalk.blue.bold('🛠️  QYGit - 增强的 Git 包装工具 v0.2.0'));
+    console.log(chalk.blue.bold('🛠️  QYGit - 增强的 Git 包装工具 v1.2.0'));
     console.log('');
     console.log(chalk.yellow.bold('📋 基础命令:'));
     console.log('  $ qygit qc "feat: add new feature"    # 快速 commit 和 push');
@@ -586,11 +716,19 @@ program.on('--help', () => {
     console.log('  $ qygit cp --continue                 # 解决冲突后继续');
     console.log('  $ qygit cp --abort                    # 中止 cherry-pick');
     console.log('');
-    console.log(chalk.magenta.bold('📦 其他功能:'));
+    console.log(chalk.magenta.bold('🔄 同步功能:'));
+    console.log('  $ qygit sync                          # 同步当前分支 (pull + push)');
+    console.log('  $ qygit sync-all                      # 智能同步所有本地分支');
+    console.log('  $ qygit sync-all -s dev,test          # 同步时跳过指定分支');
+    console.log('  $ qygit sync-all -o main,feature      # 只同步指定分支');
+    console.log('  $ qygit sync-all -f                   # 强制推送（有冲突时）');
+    console.log('  $ qygit gl                            # 从 origin/master 获取最新');
+    console.log('');
+    console.log(chalk.blue.bold('📦 工作暂存:'));
     console.log('  $ qygit stash -s "work in progress"   # 保存工作到 stash');
     console.log('  $ qygit stash -p                      # 恢复最新 stash');
-    console.log('  $ qygit sync                          # 同步远程 (pull + push)');
-    console.log('  $ qygit gl                            # 从 origin/master 获取最新');
+    console.log('  $ qygit stash -l                      # 列出所有 stash');
+    console.log('  $ qygit stash -c                      # 清空所有 stash');
     console.log('');
     console.log(chalk.gray('💡 提示: 每个命令都有简短别名，使用 qygit <command> --help 查看详细选项'));
     console.log('');
