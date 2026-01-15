@@ -33,6 +33,10 @@ npm link
 # 添加所有文件、提交并推送
 qygit quickCommit "feat: add new feature"
 qygit qc "fix: resolve bug"  # 使用别名
+
+# 快速提交（跳过 Git hooks）
+qygit quickCommitNoVerify "feat: add new feature"
+qygit qcn "fix: resolve bug"  # 使用别名
 ```
 
 ### 状态查看 (Status)
@@ -160,6 +164,7 @@ qygit cp --skip                  # 跳过当前 commit
 | 命令 | 别名 | 描述 |
 |------|------|------|
 | `quickCommit <message>` | `qc` | 快速添加、提交并推送 |
+| `quickCommitNoVerify <message>` | `qcn` | 快速添加、提交（跳过 hooks）并推送 |
 | `status` | `st` | 美化的状态显示 |
 | `branch [options]` | `br` | 分支管理 |
 | `switch <branch>` | `sw` | 切换分支 |

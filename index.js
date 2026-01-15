@@ -15,16 +15,39 @@ program.command("quickCommit <message>")
     .action(async (message) => {
         try {
             console.log(chalk.blue('🚀 开始快速 commit...'));
-            
+
         const files = await execa('git', ['add', '.']);
             console.log(chalk.green('✅ 文件已添加'));
-            
+
         const commit = await execa('git', ['commit', '-m', message]);
             console.log(chalk.green('✅ Commit 成功'));
-            
+
         const push = await execa('git', ['push']);
             console.log(chalk.green('✅ 已 push 到远程'));
-            
+
+            console.log(chalk.green.bold('🎉 快速 commit 完成！'));
+        } catch (error) {
+            console.error(chalk.red('❌ 错误:'), error.message);
+        }
+    });
+
+// 快速提交功能（跳过 hooks）
+program.command("quickCommitNoVerify <message>")
+    .alias("qcn")
+    .description("快速添加文件、commit（跳过 hooks）并 push")
+    .action(async (message) => {
+        try {
+            console.log(chalk.blue('🚀 开始快速 commit（跳过 hooks）...'));
+
+        const files = await execa('git', ['add', '.']);
+            console.log(chalk.green('✅ 文件已添加'));
+
+        const commit = await execa('git', ['commit', '-m', message, '-n']);
+            console.log(chalk.green('✅ Commit 成功（已跳过 hooks）'));
+
+        const push = await execa('git', ['push']);
+            console.log(chalk.green('✅ 已 push 到远程'));
+
             console.log(chalk.green.bold('🎉 快速 commit 完成！'));
         } catch (error) {
             console.error(chalk.red('❌ 错误:'), error.message);
@@ -697,6 +720,7 @@ program.on('--help', () => {
     console.log('');
     console.log(chalk.yellow.bold('📋 基础命令:'));
     console.log('  $ qygit qc "feat: add new feature"    # 快速 commit 和 push');
+    console.log('  $ qygit qcn "fix: bug"                # 快速 commit（跳过 hooks）和 push');
     console.log('  $ qygit st                            # 美化状态显示');
     console.log('  $ qygit ci                            # 交互式 commit');
     console.log('  $ qygit lg -n 20                      # 显示提交日志');
