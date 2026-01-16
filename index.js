@@ -16,13 +16,20 @@ program.command("quickCommit <message>")
         try {
             console.log(chalk.blue('🚀 开始快速 commit...'));
 
-        const files = await execa('git', ['add', '.']);
-            console.log(chalk.green('✅ 文件已添加'));
+            // 检查暂存区
+            const stagedFiles = await execa('git', ['diff', '--cached', '--name-only']);
 
-        const commit = await execa('git', ['commit', '-m', message]);
+            if (stagedFiles.stdout.trim()) {
+                console.log(chalk.cyan('📋 使用暂存区已有文件'));
+            } else {
+                await execa('git', ['add', '.']);
+                console.log(chalk.green('✅ 文件已添加'));
+            }
+
+            await execa('git', ['commit', '-m', message]);
             console.log(chalk.green('✅ Commit 成功'));
 
-        const push = await execa('git', ['push']);
+            await execa('git', ['push']);
             console.log(chalk.green('✅ 已 push 到远程'));
 
             console.log(chalk.green.bold('🎉 快速 commit 完成！'));
@@ -39,13 +46,20 @@ program.command("quickCommitNoVerify <message>")
         try {
             console.log(chalk.blue('🚀 开始快速 commit（跳过 hooks）...'));
 
-        const files = await execa('git', ['add', '.']);
-            console.log(chalk.green('✅ 文件已添加'));
+            // 检查暂存区
+            const stagedFiles = await execa('git', ['diff', '--cached', '--name-only']);
 
-        const commit = await execa('git', ['commit', '-m', message, '-n']);
+            if (stagedFiles.stdout.trim()) {
+                console.log(chalk.cyan('📋 使用暂存区已有文件'));
+            } else {
+                await execa('git', ['add', '.']);
+                console.log(chalk.green('✅ 文件已添加'));
+            }
+
+            await execa('git', ['commit', '-m', message, '-n']);
             console.log(chalk.green('✅ Commit 成功（已跳过 hooks）'));
 
-        const push = await execa('git', ['push']);
+            await execa('git', ['push']);
             console.log(chalk.green('✅ 已 push 到远程'));
 
             console.log(chalk.green.bold('🎉 快速 commit 完成！'));
