@@ -7,7 +7,7 @@ import inquirer from 'inquirer';
 
 const program = new Command();
 
-program.name('qygit').description('QY 的简单 Git 包装工具').version('1.2.0');
+program.name('qygit').description('QY 的简单 Git 包装工具').version('1.4.0');
 // 快速提交功能
 program.command("quickCommit <message>")
     .alias("qc")
@@ -415,6 +415,242 @@ program.command("commit")
         }
     });
 
+// 交互式创建 Tag
+program.command("tag")
+    .alias("tg")
+    .description("交互式创建和发布 tag")
+    .action(async () => {
+        try {
+            console.log(chalk.blue.bold('🏷️  交互式创建 Tag'));
+            console.log('');
+
+            // 获取最新的 tag
+            let latestTag = '';
+            try {
+                const tagResult = await execa('git', ['describe', '--tags', '--abbrev=0']);
+                latestTag = tagResult.stdout.trim();
+                console.log(chalk.gray(`最新 tag: ${latestTag}`));
+                console.log('');
+            } catch (error) {
+                console.log(chalk.gray('当前没有 tag'));
+                console.log('');
+            }
+
+            // 解析版本号用于语义化版本建议
+            let suggestedVersions = {
+                major: 'v1.0.0',
+                minor: 'v0.1.0',
+                patch: 'v0.0.1'
+            };
+
+            if (latestTag) {
+                const versionMatch = latestTag.match(/^v?(\d+)\.(\d+)\.(\d+)/);
+                if (versionMatch) {
+                    const [, major, minor, patch] = versionMatch;
+                    const hasV = latestTag.startsWith('v');
+                    const prefix = hasV ? 'v' : '';
+                    suggestedVersions = {
+                        major: `${prefix}${parseInt(major) + 1}.0.0`,
+                        minor: `${prefix}${major}.${parseInt(minor) + 1}.0`,
+                        patch: `${prefix}${major}.${minor}.${parseInt(patch) + 1}`
+                    };
+                }
+            }
+
+            // 选择版本策略
+            const { versionStrategy } = await inquirer.prompt([
+                {
+                    type: 'list',
+                    name: 'versionStrategy',
+                    message: '选择版本策略:',
+                    choices: [
+                        {
+                            name: `🔼 Major (破坏性更新) - ${suggestedVersions.major}`,
+                            value: 'major',
+                            short: 'Major'
+                        },
+                        {
+                            name: `⬆️  Minor (新功能) - ${suggestedVersions.minor}`,
+                            value: 'minor',
+                            short: 'Minor'
+                        },
+                        {
+                            name: `🔧 Patch (Bug 修复) - ${suggestedVersions.patch}`,
+                            value: 'patch',
+                            short: 'Patch'
+                        },
+                        {
+                            name: '✏️  自定义版本号',
+                            value: 'custom',
+                            short: 'Custom'
+                        }
+                    ]
+                }
+            ]);
+
+            // 输入 tag 名称
+            let tagName = '';
+            if (versionStrategy === 'custom') {
+                const { customTag } = await inquirer.prompt([
+                    {
+                        type: 'input',
+                        name: 'customTag',
+                        message: '输入 tag 名称:',
+                        validate: (input) => {
+                            if (!input.trim()) {
+                                return 'Tag 名称不能为空';
+                            }
+                            return true;
+                        }
+                    }
+                ]);
+                tagName = customTag;
+            } else {
+                tagName = suggestedVersions[versionStrategy];
+
+                // 允许用户修改建议的版本号
+                const { confirmTag } = await inquirer.prompt([
+                    {
+                        type: 'confirm',
+                        name: 'confirmTag',
+                        message: `使用建议的版本号 ${chalk.cyan(tagName)}?`,
+                        default: true
+                    }
+                ]);
+
+                if (!confirmTag) {
+                    const { customTag } = await inquirer.prompt([
+                        {
+                            type: 'input',
+                            name: 'customTag',
+                            message: '输入自定义 tag 名称:',
+                            default: tagName,
+                            validate: (input) => {
+                                if (!input.trim()) {
+                                    return 'Tag 名称不能为空';
+                                }
+                                return true;
+                            }
+                        }
+                    ]);
+                    tagName = customTag;
+                }
+            }
+
+            // 选择 tag 类型
+            const { tagType } = await inquirer.prompt([
+                {
+                    type: 'list',
+                    name: 'tagType',
+                    message: '选择 tag 类型:',
+                    choices: [
+                        {
+                            name: '📝 附注 tag (推荐，包含完整信息)',
+                            value: 'annotated',
+                            short: 'Annotated'
+                        },
+                        {
+                            name: '🏷️  轻量级 tag (仅标记)',
+                            value: 'lightweight',
+                            short: 'Lightweight'
+                        }
+                    ],
+                    default: 'annotated'
+                }
+            ]);
+
+            let tagMessage = '';
+            if (tagType === 'annotated') {
+                // 输入 tag 消息
+                const { message } = await inquirer.prompt([
+                    {
+                        type: 'input',
+                        name: 'message',
+                        message: '输入 tag 描述:',
+                        default: `Release ${tagName}`,
+                        validate: (input) => {
+                            if (!input.trim()) {
+                                return 'Tag 描述不能为空';
+                            }
+                            return true;
+                        }
+                    }
+                ]);
+                tagMessage = message;
+            }
+
+            // 显示预览
+            console.log('');
+            console.log(chalk.blue.bold('📋 Tag 信息预览:'));
+            console.log(chalk.gray('─'.repeat(50)));
+            console.log(chalk.cyan(`Tag 名称: ${tagName}`));
+            console.log(chalk.cyan(`Tag 类型: ${tagType === 'annotated' ? '附注 tag' : '轻量级 tag'}`));
+            if (tagMessage) {
+                console.log(chalk.cyan(`Tag 描述: ${tagMessage}`));
+            }
+            console.log(chalk.gray('─'.repeat(50)));
+            console.log('');
+
+            // 确认创建
+            const { confirmCreate } = await inquirer.prompt([
+                {
+                    type: 'confirm',
+                    name: 'confirmCreate',
+                    message: '确认创建此 tag?',
+                    default: true
+                }
+            ]);
+
+            if (!confirmCreate) {
+                console.log(chalk.yellow('⚠️  Tag 创建已取消'));
+                return;
+            }
+
+            // 创建 tag
+            if (tagType === 'annotated') {
+                await execa('git', ['tag', '-a', tagName, '-m', tagMessage]);
+            } else {
+                await execa('git', ['tag', tagName]);
+            }
+            console.log(chalk.green(`✅ Tag ${tagName} 创建成功！`));
+
+            // 询问是否推送到远程
+            const { shouldPush } = await inquirer.prompt([
+                {
+                    type: 'confirm',
+                    name: 'shouldPush',
+                    message: '是否推送 tag 到远程?',
+                    default: true
+                }
+            ]);
+
+            if (shouldPush) {
+                await execa('git', ['push', 'origin', tagName]);
+                console.log(chalk.green(`✅ Tag ${tagName} 已推送到远程！`));
+
+                // 询问是否推送所有 tags
+                const { pushAllTags } = await inquirer.prompt([
+                    {
+                        type: 'confirm',
+                        name: 'pushAllTags',
+                        message: '是否同时推送所有本地 tag?',
+                        default: false
+                    }
+                ]);
+
+                if (pushAllTags) {
+                    await execa('git', ['push', '--tags']);
+                    console.log(chalk.green('✅ 所有 tag 已推送到远程！'));
+                }
+            }
+
+            console.log(chalk.green.bold('🎉 操作完成！'));
+
+        } catch (error) {
+            console.error(chalk.red('❌ Tag 操作失败:'), error.message);
+        }
+    });
+
 // Stash 管理
 program.command("stash")
     .description("Stash 管理")
@@ -730,13 +966,14 @@ async function getCommitsInRange(range) {
 // 显示帮助信息
 program.on('--help', () => {
     console.log('');
-    console.log(chalk.blue.bold('🛠️  QYGit - 增强的 Git 包装工具 v1.2.0'));
+    console.log(chalk.blue.bold('🛠️  QYGit - 增强的 Git 包装工具 v1.4.0'));
     console.log('');
     console.log(chalk.yellow.bold('📋 基础命令:'));
     console.log('  $ qygit qc "feat: add new feature"    # 快速 commit 和 push');
     console.log('  $ qygit qcn "fix: bug"                # 快速 commit（跳过 hooks）和 push');
     console.log('  $ qygit st                            # 美化状态显示');
     console.log('  $ qygit ci                            # 交互式 commit');
+    console.log('  $ qygit tg                            # 交互式创建和发布 tag');
     console.log('  $ qygit lg -n 20                      # 显示提交日志');
     console.log('');
     console.log(chalk.green.bold('🌿 分支管理:'));
