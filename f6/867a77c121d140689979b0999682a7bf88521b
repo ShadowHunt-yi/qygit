@@ -1,0 +1,18 @@
+README.md
+  h_6984196a933a03 153-185,238
+index.js
+  h_6984196a933a03 10,851-1119,1254-1260
+package.json
+  h_6984196a933a03 3-4
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.6",
+  "base_commit_sha": "f6867a77c121d140689979b0999682a7bf88521b",
+  "prompts": {},
+  "humans": {
+    "h_6984196a933a03": {
+      "author": "qiyi <1724747604@qq.com>"
+    }
+  }
+}
