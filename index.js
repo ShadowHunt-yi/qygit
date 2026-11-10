@@ -7,7 +7,7 @@ import inquirer from 'inquirer';
 
 const program = new Command();
 
-program.name('qygit').description('QY 的简单 Git 包装工具').version('1.4.0');
+program.name('qygit').description('QY 的简单 Git 包装工具').version('1.5.0');
 // 快速提交功能
 program.command("quickCommit <message>")
     .alias("qc")
@@ -848,6 +848,275 @@ program.command("getLatest").alias("gl")
         }
     });
 
+// ============ mergeTo：切到目标分支 → 更新 → 合并当前分支 → 推送 → 切回 ============
+const MERGE_TARGET_PRESETS = ['test', 'release'];
+
+// 收集可选分支：本地分支 + 远程独有分支（用于给出候选）
+async function collectBranchCandidates() {
+    const local = (await execa('git', ['branch', '--format=%(refname:short)'])).stdout
+        .split('\n').map(s => s.trim()).filter(Boolean);
+    let remote = [];
+    try {
+        remote = (await execa('git', ['branch', '-r', '--format=%(refname:short)'])).stdout
+            .split('\n').map(s => s.trim()).filter(Boolean)
+            .filter(b => b.startsWith('origin/') && !b.endsWith('/HEAD'))
+            .map(b => b.slice('origin/'.length));
+    } catch {
+        // 无远程仓库时忽略
+    }
+    return { local, remote };
+}
+
+// 判断仓库是否处于合并中状态（冲突、pull 产生的合并冲突等）
+async function isMerging() {
+    try {
+        await execa('git', ['rev-parse', '-q', '--verify', 'MERGE_HEAD']);
+        return true;
+    } catch {
+        return false;
+    }
+}
+
+program.command("mergeTo [target]")
+    .alias("mt")
+    .description("切到目标分支（默认 test/release）→ 更新该分支 → 合并当前分支 → 推送 → 切回")
+    .option('--no-push', '合并后不推送目标分支到远程')
+    .option('--no-back', '完成后不切回原分支')
+    .option('-y, --yes', '跳过确认，直接执行')
+    .action(async (target, options) => {
+        const shouldPush = options.push !== false;
+        const shouldBack = options.back !== false;
+        let originalBranch = '';
+        let stashed = false;
+        let merged = false;
+        let leftOriginal = false;
+
+        try {
+            // 0. 前置检查：必须是 Git 仓库
+            try {
+                await execa('git', ['rev-parse', '--git-dir']);
+            } catch {
+                console.log(chalk.red('❌ 当前目录不是 Git 仓库'));
+                process.exitCode = 1;
+                return;
+            }
+
+            // 1. 当前分支即“源分支 a”
+            originalBranch = (await execa('git', ['branch', '--show-current'])).stdout.trim();
+            if (!originalBranch) {
+                console.log(chalk.red('❌ 当前处于 detached HEAD 状态，请先切换到一个分支'));
+                process.exitCode = 1;
+                return;
+            }
+
+            // 2. 确定目标分支：优先命令行参数，否则交互选择（默认 test / release）
+            if (!target) {
+                const { local, remote } = await collectBranchCandidates();
+                const all = [...local, ...remote.filter(b => !local.includes(b))]
+                    .filter(b => b !== originalBranch);
+
+                const presetHits = MERGE_TARGET_PRESETS.filter(b => all.includes(b));
+                const others = all.filter(b => !presetHits.includes(b)).sort();
+
+                const choices = [
+                    ...presetHits.map(b => ({
+                        name: `${local.includes(b) ? '🌿' : '☁️ '} ${b}`,
+                        value: b,
+                        short: b
+                    })),
+                    new inquirer.Separator('── 其他分支 ──'),
+                    ...others.map(b => ({
+                        name: `${local.includes(b) ? '🌿' : '☁️ '} ${b}`,
+                        value: b,
+                        short: b
+                    })),
+                    new inquirer.Separator('── 自定义 ──'),
+                    { name: '✏️  手动输入分支名', value: '__custom__', short: '自定义' }
+                ];
+
+                const { picked } = await inquirer.prompt([
+                    {
+                        type: 'list',
+                        name: 'picked',
+                        message: `把 ${chalk.cyan(originalBranch)} 合并到哪个分支?`,
+                        choices,
+                        default: presetHits[0],
+                        pageSize: 15
+                    }
+                ]);
+
+                if (picked === '__custom__') {
+                    const { custom } = await inquirer.prompt([
+                        {
+                            type: 'input',
+                            name: 'custom',
+                            message: '输入目标分支名:',
+                            validate: (input) => {
+                                const name = input.trim();
+                                if (!name) return '分支名不能为空';
+                                if (name === originalBranch) return '目标分支不能与当前分支相同';
+                                if (/\s/.test(name)) return '分支名不能包含空格';
+                                return true;
+                            }
+                        }
+                    ]);
+                    target = custom.trim();
+                } else {
+                    target = picked;
+                }
+            }
+
+            target = target.trim();
+            if (target === originalBranch) {
+                console.log(chalk.yellow(`⚠️  目标分支与当前分支相同（${target}），无需合并`));
+                return;
+            }
+
+            // 3. 预览并确认
+            console.log('');
+            console.log(chalk.blue.bold('📋 mergeTo 执行计划:'));
+            console.log(chalk.gray('─'.repeat(50)));
+            console.log(`  源分支   : ${chalk.cyan(originalBranch)}`);
+            console.log(`  目标分支 : ${chalk.cyan(target)}`);
+            console.log(chalk.gray('  步骤: checkout → pull → merge → '
+                + (shouldPush ? 'push → ' : '') + (shouldBack ? `切回 ${originalBranch}` : '停留目标分支')));
+            console.log(chalk.gray('─'.repeat(50)));
+            console.log('');
+
+            if (!options.yes) {
+                const { confirmed } = await inquirer.prompt([
+                    {
+                        type: 'confirm',
+                        name: 'confirmed',
+                        message: '确认执行?',
+                        default: true
+                    }
+                ]);
+                if (!confirmed) {
+                    console.log(chalk.yellow('⚠️  已取消'));
+                    return;
+                }
+            }
+
+            // 4. 脏工作区自动 stash
+            const dirty = (await execa('git', ['status', '--porcelain'])).stdout.trim();
+            if (dirty) {
+                console.log(chalk.yellow('📦 检测到未提交的修改，自动 stash...'));
+                await execa('git', ['stash', 'push', '-u', '-m', `qygit-mergeTo(${originalBranch}→${target})`]);
+                stashed = true;
+                console.log(chalk.green('✅ 已 stash'));
+            }
+
+            // 5. 切换目标分支（不存在时尝试基于远程自动建立跟踪分支）
+            try {
+                await execa('git', ['checkout', target]);
+            } catch {
+                console.log(chalk.yellow(`⚠️  本地无 ${target}，尝试基于远程创建跟踪分支...`));
+                try {
+                    await execa('git', ['checkout', '-b', target, '--track', `origin/${target}`]);
+                } catch {
+                    console.log(chalk.red(`❌ 分支 ${target} 在本地和远程都不存在，请检查分支名`));
+                    console.log(chalk.gray('   可先执行: git fetch origin'));
+                    process.exitCode = 1;
+                    return;
+                }
+            }
+            console.log(chalk.green(`✅ 已切换到 ${target}`));
+            leftOriginal = true;
+
+            // 6. 更新目标分支
+            try {
+                await execa('git', ['pull'], { stdio: 'inherit' });
+                console.log(chalk.green('✅ 目标分支已更新'));
+            } catch (pullError) {
+                const raw = `${pullError.stderr || ''} ${pullError.message || ''}`;
+                if (/no tracking information/i.test(raw)) {
+                    await execa('git', ['pull', 'origin', target], { stdio: 'inherit' });
+                    console.log(chalk.green('✅ 目标分支已更新'));
+                } else if (/couldn't find remote ref|Couldn't find remote ref/i.test(raw)) {
+                    console.log(chalk.yellow(`⚠️  远程不存在 ${target}，跳过更新`));
+                } else {
+                    throw pullError;
+                }
+            }
+
+            // 7. 合并源分支
+            console.log(chalk.blue(`🔀 正在合并 ${originalBranch} → ${target}...`));
+            try {
+                await execa('git', ['merge', originalBranch, '--no-edit'], { stdio: 'inherit' });
+            } catch (mergeError) {
+                const conflicts = (await execa('git', ['diff', '--name-only', '--diff-filter=U'])
+                    .catch(() => ({ stdout: '' }))).stdout.trim();
+                console.log('');
+                console.log(chalk.red(`❌ 合并 ${originalBranch} → ${target} 失败${conflicts ? '（存在冲突）' : ''}`));
+                if (conflicts) {
+                    console.log(chalk.yellow('冲突文件:'));
+                    conflicts.split('\n').filter(Boolean).forEach(f => console.log(`  ⚠️  ${f}`));
+                }
+                console.log('');
+                console.log(chalk.cyan('🔧 后续处理建议:'));
+                console.log('  git status                      # 查看冲突详情');
+                console.log('  # 解决冲突后:');
+                console.log(`  git add . && git commit --no-edit`);
+                if (shouldPush) console.log(`  git push origin ${target}`);
+                process.exitCode = 1;
+                return;
+            }
+            merged = true;
+            console.log(chalk.green(`✅ 已合并 ${originalBranch} → ${target}`));
+
+            // 8. 推送目标分支
+            if (shouldPush) {
+                try {
+                    await execa('git', ['push', 'origin', target], { stdio: 'inherit' });
+                    console.log(chalk.green(`✅ 已推送 ${target} 到远程`));
+                } catch (pushError) {
+                    console.log(chalk.yellow(`⚠️  推送 ${target} 失败，本地合并结果已保留`));
+                    console.log(chalk.gray(`   可手动重试: git push origin ${target}`));
+                    process.exitCode = 1;
+                }
+            }
+
+        } catch (error) {
+            // 用户在交互提示中取消（Ctrl+C 等）
+            if (error && (error.name === 'ExitPromptError' || /force closed/i.test(error.message || ''))) {
+                console.log(chalk.yellow('⚠️  操作已取消'));
+                return;
+            }
+            console.error(chalk.red('❌ mergeTo 失败:'), (error.stderr || error.message || '').toString().trim());
+            process.exitCode = 1;
+        } finally {
+            // 处于合并中（含冲突、pull 产生的合并冲突）时不做收尾，避免破坏现场
+            const merging = await isMerging();
+
+            // 9. 切回原分支
+            if (shouldBack && leftOriginal && !merging) {
+                try {
+                    await execa('git', ['checkout', originalBranch]);
+                    console.log(chalk.green(`✅ 已切回 ${originalBranch}`));
+                } catch {
+                    console.log(chalk.yellow(`⚠️  切回 ${originalBranch} 失败，请手动切换`));
+                }
+            }
+
+            // 10. 恢复 stash
+            if (stashed && !merging) {
+                try {
+                    await execa('git', ['stash', 'pop']);
+                    console.log(chalk.green('✅ 已恢复 stash'));
+                } catch {
+                    console.log(chalk.yellow('⚠️  stash 恢复失败，请手动执行: qygit stash -p'));
+                }
+            } else if (stashed && merging) {
+                console.log(chalk.yellow('📦 你的改动仍在 stash 中，处理完合并后执行: qygit stash -p'));
+            }
+
+            if (merged && process.exitCode !== 1) {
+                console.log(chalk.green.bold('🎉 mergeTo 完成！'));
+            }
+        }
+    });
+
 program.command("cherryPick [commits...]")
     .alias("cp")
     .description("cherry pick 指定 commit(s)，支持多个 commit、区间和排除")
@@ -981,6 +1250,13 @@ program.on('--help', () => {
     console.log('  $ qygit br -d old-branch              # 删除分支');
     console.log('  $ qygit sw main                       # 切换分支');
     console.log('  $ qygit br -l                         # 列出所有分支');
+    console.log('');
+    console.log(chalk.green.bold('🔀 一键合并到目标分支:'));
+    console.log('  $ qygit mt                            # 交互选择 test/release 等目标分支');
+    console.log('  $ qygit mt test                       # 直接指定目标分支');
+    console.log('  $ qygit mt release --no-push          # 只本地合并，不推送');
+    console.log('  $ qygit mt test -y                    # 跳过确认直接执行');
+    console.log(chalk.gray('      流程: 切到目标分支 → pull → 合并当前分支 → push → 切回原分支'));
     console.log('');
     console.log(chalk.cyan.bold('🍒 Cherry-Pick 功能:'));
     console.log('  $ qygit cp abc123                     # 单个 commit');

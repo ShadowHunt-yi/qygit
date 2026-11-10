@@ -150,6 +150,39 @@ qygit stash  # 默认列出
 qygit stash -c
 ```
 
+### 一键合并到目标分支 (mergeTo)
+```bash
+# 交互式选择目标分支（预设 test / release，置顶展示）
+qygit mergeTo
+qygit mt  # 使用别名
+
+# 直接指定目标分支
+qygit mt test
+qygit mt release
+
+# 只本地合并，不推送
+qygit mt release --no-push
+
+# 完成后停留在目标分支
+qygit mt test --no-back
+
+# 跳过确认直接执行（适合脚本/自动化）
+qygit mt test -y
+```
+
+执行流程（当前分支记为 a）：
+1. 切到目标分支（本地不存在时自动基于 `origin/<目标分支>` 建立跟踪分支）
+2. `git pull` 更新目标分支
+3. 合并 a 到目标分支
+4. 推送目标分支到远程（可用 `--no-push` 关闭）
+5. 切回 a 分支（可用 `--no-back` 关闭）
+
+安全设计：
+- 🧷 **脏工作区自动 stash** - 检测到未提交改动时自动 `stash -u`，流程结束（含失败）自动恢复
+- 🛡️ **同分支保护** - 目标分支与当前分支相同时直接提示，不执行任何操作
+- ⚠️ **冲突保留现场** - 合并冲突时停在目标分支、列出冲突文件并给出后续命令，stash 内容保留待手动恢复
+- 🔙 **失败自动回退** - 未发生合并的失败场景（如分支不存在）会恢复 stash 并回到原分支
+
 ### 同步功能 (Sync)
 ```bash
 # 先 pull 再 push
@@ -202,6 +235,7 @@ qygit cp --skip                  # 跳过当前 commit
 | `status` | `st` | 美化的状态显示 |
 | `branch [options]` | `br` | 分支管理 |
 | `switch <branch>` | `sw` | 切换分支 |
+| `mergeTo [target]` | `mt` | 切到目标分支 → 更新 → 合并当前分支 → 推送 → 切回 |
 | `log [options]` | `lg` | 美化的提交日志 |
 | `commit` | `ci` | 交互式提交 |
 | `tag` | `tg` | 交互式创建和发布 tag |
